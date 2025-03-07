@@ -1,39 +1,3 @@
-# requirements.txt
-streamlit==1.26.0
-pandas==2.0.3
-numpy==1.24.3
-plotly==5.15.0
-gspread==5.10.0
-oauth2client==4.1.3
-google-auth==2.22.0
-openai==0.28.0
-python-dotenv==1.0.0
-
-# .streamlit/config.toml
-[theme]
-primaryColor = "#F63366"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F0F2F6"
-textColor = "#262730"
-font = "sans serif"
-
-# .streamlit/secrets.toml
-# 以下は例です。実際のデプロイ時には適切な認証情報に置き換えてください
-[gcp_service_account]
-type = "service_account"
-project_id = "your-project-id"
-private_key_id = "your-private-key-id"
-private_key = "your-private-key"
-client_email = "your-client-email"
-client_id = "your-client-id"
-auth_uri = "https://accounts.google.com/o/oauth2/auth"
-token_uri = "https://oauth2.googleapis.com/token"
-auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
-client_x509_cert_url = "your-cert-url"
-
-[openai]
-api_key = "your-openai-api-key"
-
 # README.md
 # 広告パフォーマンス分析システム
 
