@@ -56,7 +56,7 @@ def load_data_from_gsheet(url, sheet_name):
         else:
             # ローカル開発用（サービスアカウントのJSONファイルが必要）
             st.sidebar.warning("サービスアカウントキーがセットアップされていません。credentials.jsonファイルが必要です。")
-            credentials = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
+            credentials = ServiceAccountCredentials.from_json_keyfile_name('.credentials.json', scope)
         
         client = gspread.authorize(credentials)
         
@@ -91,7 +91,9 @@ def load_data_from_gsheet(url, sheet_name):
         return df
     
     except Exception as e:
+        import traceback
         st.sidebar.error(f"データ読み込み中にエラーが発生しました: {str(e)}")
+        st.sidebar.error(f"詳細: {traceback.format_exc()}")
         return None
 
 # 派生指標の計算関数 - 追加要件に応じて強化

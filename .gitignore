@@ -1,0 +1,28 @@
+# 認証情報
+credentials.json
+*.json.key
+.credentials.json
+
+# Streamlitの設定や一時ファイル
+.streamlit/
+streamlit/
+
+# Python環境
+venv/
+.venv/
+env/
+.env/
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+
+# IDEの設定ファイル
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS生成ファイル
+.DS_Store
+Thumbs.db
