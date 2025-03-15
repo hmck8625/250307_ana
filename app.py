@@ -40,6 +40,40 @@ with st.sidebar.expander("API設定", expanded=False):
     if openai_api_key:
         st.success("APIキーが設定されました")
 
+def format_metrics_enhanced(df, integer_cols=['Impressions', 'Clicks', 'Conversions'], 
+    currency_cols=['Cost', 'CPM', 'CPC', 'CPA'],
+    percentage_cols=['CTR', 'CVR']):
+    """
+    データフレームの数値を指定されたフォーマットに整形する
+    
+    Parameters:
+    df (DataFrame): フォーマットするデータフレーム
+    integer_cols (list): 整数表示する列
+    currency_cols (list): 円表記で整数表示する列
+    percentage_cols (list): パーセント表記で小数第一位まで表示する列
+    
+    Returns:
+    DataFrame: フォーマット済みのデータフレーム
+    """
+    df_formatted = df.copy()
+    
+    # 整数表示（カンマ区切り）
+    for col in integer_cols:
+        if col in df_formatted.columns:
+            df_formatted[col] = df_formatted[col].apply(lambda x: f"{int(x):,}" if pd.notnull(x) and x != 0 else "-")
+    
+    # 通貨表示（円マーク付き整数）
+    for col in currency_cols:
+        if col in df_formatted.columns:
+            df_formatted[col] = df_formatted[col].apply(lambda x: f"¥{int(x):,}" if pd.notnull(x) and x != 0 else "-")
+    
+    # パーセント表示（小数点第一位）
+    for col in percentage_cols:
+        if col in df_formatted.columns:
+            df_formatted[col] = df_formatted[col].apply(lambda x: f"{x:.1f}%" if pd.notnull(x) and x != 0 else "-")
+            
+    return df_formatted
+
 # Googleスプレッドシートからデータを読み込む関数
 def load_data_from_gsheet(url, sheet_name):
     try:
@@ -3945,138 +3979,607 @@ def main():
         "分析手法の説明"
     ])
     
-    # タブ1: データ概要 - 既存のまま
+# タブ1: データ概要 - 最適化版
     with tab1:
-        st.header("データ概要")
+        st.header("データ分析ダッシュボード")
         
-        # データの基本情報
-        st.subheader("基本情報")
-        st.write(f"行数: {len(df)}, 列数: {len(df.columns)}")
-        
-        # 日付範囲の表示
-        if 'Date' in df.columns:
-            min_date = df['Date'].min()
-            max_date = df['Date'].max()
-            st.write(f"データ期間: {min_date.strftime('%Y-%m-%d')} から {max_date.strftime('%Y-%m-%d')} ({(max_date - min_date).days + 1} 日間)")
-        
-        # 媒体数の表示
-        if 'ServiceNameJA' in df.columns:
-            media_count = df['ServiceNameJA'].nunique()
-            st.write(f"媒体数: {media_count}")
-        
-        # サンプルデータの表示
-        st.subheader("サンプルデータ")
-        
-        # 指標の表示順序を変更
-        column_order = []
-        
-        # 識別子列（媒体名、キャンペーン名、など）
-        id_columns = ['Date', 'ServiceNameJA', 'CampaignName', 'AdgroupName']
-        for col in id_columns:
-            if col in df.columns:
-                column_order.append(col)
-        
-        # 指標列（指定された順序）
-        metrics_order = ['Impressions', 'CPM', 'Clicks', 'CTR', 'CPC', 'Cost', 'Conversions', 'CPA', 'CVR']
-        for col in metrics_order:
-            if col in df.columns:
-                column_order.append(col)
-        
-        # その他の列
-        for col in df.columns:
-            if col not in column_order:
-                column_order.append(col)
-        
-        # 並べ替えたデータフレームを表示
-        sample_df = df[column_order].head(10)
-        
-        # 数値フォーマットの調整
-        formatted_sample_df = format_metrics(sample_df)
-        st.dataframe(formatted_sample_df)
-        
-        # 日次データの表示（折れ線グラフ）
-        if 'Date' in df.columns:
-            st.subheader("日次推移")
+        # 上部: フィルター設定エリア（小さくコンパクトに）
+        with st.expander("分析設定", expanded=True):
+            # 列を3つに分けてフィルター要素を配置
+            col1, col2, col3 = st.columns(3)
             
-            # グラフ選択
-            metric_option = st.selectbox(
+            # 1. 期間選択
+            with col1:
+                if 'Date' in df.columns:
+                    min_date = df['Date'].min().date()
+                    max_date = df['Date'].max().date()
+                    
+                    date_range = st.date_input(
+                        "期間選択",
+                        value=(min_date, max_date),
+                        min_value=min_date,
+                        max_value=max_date
+                    )
+                    
+                    # 日付範囲の処理
+                    if isinstance(date_range, tuple) and len(date_range) == 2:
+                        start_date, end_date = date_range
+                    elif isinstance(date_range, list) and len(date_range) >= 1:
+                        # リストとして返される場合の処理
+                        if len(date_range) == 1:
+                            start_date = end_date = date_range[0]
+                        else:
+                            start_date, end_date = date_range[0], date_range[-1]
+                    else:
+                        # 単一の日付が選択された場合
+                        start_date = end_date = date_range
+            
+            # 2. 粒度選択と指標名フィルター
+            with col2:
+                # 利用可能な粒度オプションを確認
+                granularity_options = ['All']
+                id_columns = ['ServiceNameJA', 'CampaignName', 'AdgroupName']
+                
+                for col in id_columns:
+                    if col in df.columns:
+                        granularity_options.append(col)
+                
+                selected_granularity = st.selectbox(
+                    "粒度選択",
+                    granularity_options,
+                    index=0
+                )
+                
+                # 選択した粒度に基づいて、指標名のフィルターを動的に表示
+                selected_item = {}  # 選択した指標名を格納する辞書
+                
+                if selected_granularity != 'All':
+                    if selected_granularity == 'ServiceNameJA' and 'ServiceNameJA' in df.columns:
+                        # ServiceNameJA選択
+                        service_options = ['All'] + sorted(df['ServiceNameJA'].unique().tolist())
+                        selected_item['ServiceNameJA'] = st.selectbox(
+                            "ServiceNameJA選択",
+                            service_options,
+                            index=0
+                        )
+                        
+                        # ServiceNameJA選択後、対応するCampaignNameフィルターも表示
+                        if selected_item['ServiceNameJA'] != 'All' and 'CampaignName' in df.columns:
+                            # 選択したServiceNameJAに基づいてCampaignNameをフィルタリング
+                            campaign_df = df[df['ServiceNameJA'] == selected_item['ServiceNameJA']]
+                            campaign_options = ['All'] + sorted(campaign_df['CampaignName'].unique().tolist())
+                            
+                            selected_item['CampaignName'] = st.selectbox(
+                                "CampaignName選択",
+                                campaign_options,
+                                index=0
+                            )
+                    
+                    elif selected_granularity == 'CampaignName' and 'CampaignName' in df.columns:
+                        # CampaignName選択
+                        campaign_options = ['All'] + sorted(df['CampaignName'].unique().tolist())
+                        selected_item['CampaignName'] = st.selectbox(
+                            "CampaignName選択",
+                            campaign_options,
+                            index=0
+                        )
+                    
+                    elif selected_granularity == 'AdgroupName' and 'AdgroupName' in df.columns:
+                        # AdgroupName選択
+                        adgroup_options = ['All'] + sorted(df['AdgroupName'].unique().tolist())
+                        selected_item['AdgroupName'] = st.selectbox(
+                            "AdgroupName選択",
+                            adgroup_options,
+                            index=0
+                        )
+            
+            # 3. 時間軸選択
+            with col3:
+                time_axis = st.radio(
+                    "時間軸",
+                    ["日別", "週別", "月別"],
+                    horizontal=True,
+                    key="global_time_axis"
+                )
+        
+        # 選択された設定に基づいてデータをフィルタリング
+        if 'Date' in df.columns:
+            try:
+                # pd.Timestampに変換する前に日付が有効かチェック
+                if isinstance(start_date, (datetime, pd.Timestamp)) or hasattr(start_date, 'year'):
+                    start_ts = pd.Timestamp(start_date)
+                else:
+                    st.warning(f"無効な開始日: {start_date}")
+                    return
+                    
+                if isinstance(end_date, (datetime, pd.Timestamp)) or hasattr(end_date, 'year'):
+                    end_ts = pd.Timestamp(end_date)
+                else:
+                    st.warning(f"無効な終了日: {end_date}")
+                    return
+                    
+                filtered_df = df[(df['Date'] >= start_ts) & (df['Date'] <= end_ts)]
+                
+                # フィルター後にデータが残っているか確認
+                if filtered_df.empty:
+                    st.warning("選択された期間にデータがありません。期間を調整してください。")
+                    return
+                    
+            except Exception as e:
+                st.error(f"日付の処理中にエラーが発生しました: {str(e)}")
+                return
+        else:
+            filtered_df = df.copy()
+        
+        # 選択した粒度と指標名でフィルタリング
+        if selected_granularity != 'All':
+            for key, value in selected_item.items():
+                if value != 'All' and key in filtered_df.columns:
+                    filtered_df = filtered_df[filtered_df[key] == value]
+                    
+                    # フィルター後にデータが残っているか確認
+                    if filtered_df.empty:
+                        st.warning(f"選択された {key}: {value} にデータがありません。")
+                        return
+        
+        # 時間軸に基づいてデータを集計
+        if time_axis == "日別":
+            time_column = 'Date'
+            if 'Date' in filtered_df.columns:
+                filtered_df[time_column] = filtered_df['Date']
+        elif time_axis == "週別":
+            time_column = 'Week'
+            if 'Date' in filtered_df.columns:
+                filtered_df[time_column] = filtered_df['Date'].dt.to_period('W').dt.start_time
+        elif time_axis == "月別":
+            time_column = 'Month'
+            if 'Date' in filtered_df.columns:
+                filtered_df[time_column] = filtered_df['Date'].dt.to_period('M').dt.start_time
+        
+        # 粒度選択に基づいてグループ化カラムを設定
+        if selected_granularity == 'All':
+            group_columns = [time_column]
+        else:
+            group_columns = [time_column, selected_granularity]
+        
+        # 集計関数を定義
+        def aggregate_metrics(df, group_cols):
+            # 0除算を避けるための関数
+            def safe_divide(x, y):
+                return np.where(y != 0, x / y, 0)
+            
+            # グループ化列の存在確認
+            valid_group_cols = [col for col in group_cols if col in df.columns]
+            if not valid_group_cols:
+                # グループ化列が1つもない場合は空のデータフレームを返す
+                empty_df = pd.DataFrame(columns=group_cols + ['Impressions', 'Clicks', 'Cost', 'Conversions', 
+                                                            'CTR', 'CVR', 'CPC', 'CPA', 'CPM'])
+                return empty_df
+            
+            # グループ化と集計
+            metrics = ['Impressions', 'Clicks', 'Cost', 'Conversions']
+            agg_dict = {metric: 'sum' for metric in metrics if metric in df.columns}
+            
+            # 集計するメトリクスがない場合
+            if not agg_dict:
+                empty_df = pd.DataFrame(columns=valid_group_cols + ['Impressions', 'Clicks', 'Cost', 'Conversions', 
+                                                                'CTR', 'CVR', 'CPC', 'CPA', 'CPM'])
+                return empty_df
+                
+            agg_df = df.groupby(valid_group_cols).agg(agg_dict).reset_index()
+            
+            # 派生指標の計算
+            if 'Impressions' in agg_df.columns and 'Clicks' in agg_df.columns:
+                agg_df['CTR'] = safe_divide(agg_df['Clicks'], agg_df['Impressions']) * 100
+            
+            if 'Clicks' in agg_df.columns and 'Conversions' in agg_df.columns:
+                agg_df['CVR'] = safe_divide(agg_df['Conversions'], agg_df['Clicks']) * 100
+            
+            if 'Clicks' in agg_df.columns and 'Cost' in agg_df.columns:
+                agg_df['CPC'] = safe_divide(agg_df['Cost'], agg_df['Clicks'])
+            
+            if 'Conversions' in agg_df.columns and 'Cost' in agg_df.columns:
+                agg_df['CPA'] = safe_divide(agg_df['Cost'], agg_df['Conversions'])
+            
+            if 'Impressions' in agg_df.columns and 'Cost' in agg_df.columns:
+                agg_df['CPM'] = safe_divide(agg_df['Cost'], agg_df['Impressions']) * 1000
+                
+            return agg_df
+        
+        # 集計の実行
+        aggregated_df = aggregate_metrics(filtered_df, group_columns)
+        
+        # 全体推移のグラフセクション
+        st.subheader("全体推移")
+        
+        # 全体推移用のデータ
+        summary_df = df.copy()
+        
+        # グローバルな時間軸設定を使用
+        if time_axis == "日別":
+            summary_time_column = 'Date'
+            summary_df[summary_time_column] = summary_df['Date']
+        elif time_axis == "週別":
+            summary_time_column = 'Week'
+            summary_df[summary_time_column] = summary_df['Date'].dt.to_period('W').dt.start_time
+        else:  # 月別
+            summary_time_column = 'Month'
+            summary_df[summary_time_column] = summary_df['Date'].dt.to_period('M').dt.start_time
+        
+        # 全体集計
+        summary_agg_df = aggregate_metrics(summary_df, [summary_time_column])
+        
+        if not summary_agg_df.empty:
+            # サブプロットの作成（3つのグラフを縦に配置）
+            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
+                                subplot_titles=("コスト推移", "CPA推移", "コンバージョン数推移"),
+                                vertical_spacing=0.1)
+            
+            # コスト推移グラフ（棒グラフ）
+            if 'Cost' in summary_agg_df.columns:
+                fig.add_trace(
+                    go.Bar(
+                        x=summary_agg_df[summary_time_column], 
+                        y=summary_agg_df['Cost'],
+                        name='コスト',
+                        marker_color='cornflowerblue'
+                    ),
+                    row=1, col=1
+                )
+            
+            # CPA推移グラフ（折れ線）
+            if 'CPA' in summary_agg_df.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=summary_agg_df[summary_time_column], 
+                        y=summary_agg_df['CPA'],
+                        mode='lines+markers',
+                        name='CPA',
+                        marker_color='orange'
+                    ),
+                    row=2, col=1
+                )
+            
+            # コンバージョン数推移グラフ（棒グラフ）
+            if 'Conversions' in summary_agg_df.columns:
+                fig.add_trace(
+                    go.Bar(
+                        x=summary_agg_df[summary_time_column], 
+                        y=summary_agg_df['Conversions'],
+                        name='CV数',
+                        marker_color='lightgreen'
+                    ),
+                    row=3, col=1
+                )
+            
+            # レイアウトの更新
+            fig.update_layout(
+                height=500,
+                showlegend=False,
+                margin=dict(l=40, r=40, t=80, b=40)
+            )
+            
+            # Y軸のフォーマット調整
+            fig.update_yaxes(title_text="コスト（円）", ticksuffix="円", row=1, col=1)
+            fig.update_yaxes(title_text="CPA（円）", ticksuffix="円", row=2, col=1)
+            fig.update_yaxes(title_text="コンバージョン数", row=3, col=1)
+            
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("集計データがありません。")
+        
+        # 積み上げ棒グラフのセクション
+        st.subheader("積み上げ棒グラフ")
+        
+        # コンパクトな設定UI
+        col1, col2 = st.columns([1, 3])
+        
+        with col1:
+            # コンパクトな粒度選択
+            graph_granularity_options = ['All']
+            for col in ['ServiceNameJA', 'CampaignName']:
+                if col in df.columns:
+                    graph_granularity_options.append(col)
+            
+            graph_granularity = st.selectbox(
+                "粒度",
+                graph_granularity_options,
+                index=0,
+                key="graph_granularity",
+                label_visibility="collapsed"
+            )
+        
+        with col2:
+            # 指標選択（横並び・コンパクト）
+            bar_metric = st.radio(
                 "指標選択",
-                ["Impressions", "CPM", "Clicks", "CTR", "CPC", "Cost", "Conversions", "CPA", "CVR"],
-                index=6  # デフォルトはConversions
+                ["Impressions", "Clicks", "Cost", "Conversions"],
+                horizontal=True,
+                key="bar_metric"
             )
-            
-            # 日次集計
-            daily_df = df.groupby('Date')[metric_option].sum().reset_index()
-            
-            # グラフ作成
-            fig = px.line(
-                daily_df,
-                x='Date',
-                y=metric_option,
-                title=f"{metric_option}の日次推移",
-                labels={'Date': '日付', metric_option: metric_option}
-            )
-            
-            # Yラベルのフォーマット調整
-            if metric_option in ['CTR', 'CVR']:
-                fig.update_layout(yaxis_ticksuffix='%')
-            elif metric_option in ['Cost', 'CPC', 'CPA', 'CPM']:
-                fig.update_layout(yaxis_ticksuffix='円')
-            
-            st.plotly_chart(fig, use_container_width=True)
         
-        # 媒体別データの表示（円グラフ）
-        if 'ServiceNameJA' in df.columns:
-            st.subheader("媒体別データ")
+        # グラフ表示用の指標名フィルター（隠れた状態から必要に応じて展開）
+        graph_selected_item = {}  # 選択した指標名を格納する辞書
+        
+        if graph_granularity != 'All':
+            with st.expander("詳細フィルター", expanded=False):
+                if graph_granularity == 'ServiceNameJA' and 'ServiceNameJA' in filtered_df.columns:
+                    # ServiceNameJA選択
+                    service_options = ['All'] + sorted(filtered_df['ServiceNameJA'].unique().tolist())
+                    graph_selected_item['ServiceNameJA'] = st.selectbox(
+                        "ServiceNameJA選択",
+                        service_options,
+                        index=0,
+                        key="graph_service"
+                    )
+                    
+                    # ServiceNameJA選択後、対応するCampaignNameフィルターも表示
+                    if graph_selected_item['ServiceNameJA'] != 'All' and 'CampaignName' in filtered_df.columns:
+                        # 選択したServiceNameJAに基づいてCampaignNameをフィルタリング
+                        campaign_df = filtered_df[filtered_df['ServiceNameJA'] == graph_selected_item['ServiceNameJA']]
+                        campaign_options = ['All'] + sorted(campaign_df['CampaignName'].unique().tolist())
+                        
+                        graph_selected_item['CampaignName'] = st.selectbox(
+                            "CampaignName選択",
+                            campaign_options,
+                            index=0,
+                            key="graph_campaign"
+                        )
+                
+                elif graph_granularity == 'CampaignName' and 'CampaignName' in filtered_df.columns:
+                    # CampaignName選択
+                    campaign_options = ['All'] + sorted(filtered_df['CampaignName'].unique().tolist())
+                    graph_selected_item['CampaignName'] = st.selectbox(
+                        "CampaignName選択",
+                        campaign_options,
+                        index=0,
+                        key="graph_campaign"
+                    )
+        
+        if not aggregated_df.empty:
+            # グラフ表示用のデータを準備
+            # time_columnが存在するか確認
+            if time_column not in filtered_df.columns:
+                st.warning(f"時間軸 ({time_column}) がデータにありません。")
+                return
+                
+            # 選択された粒度が存在するか確認（Allの場合は確認不要）
+            if graph_granularity != 'All' and graph_granularity not in filtered_df.columns:
+                st.warning(f"選択された粒度 ({graph_granularity}) がデータにありません。")
+                return
+                
+            # グラフ用にデータをフィルタリング
+            graph_filtered_df = filtered_df.copy()
             
-            # グラフ選択
-            media_metric = st.selectbox(
-                "指標選択（媒体別）",
-                ["Impressions", "CPM", "Clicks", "CTR", "CPC", "Cost", "Conversions", "CPA", "CVR"],
-                index=6  # デフォルトはConversions
-            )
-            
-            # 媒体別集計
-            if media_metric in ['CTR', 'CVR', 'CPC', 'CPA', 'CPM']:
-                # 平均値を計算する必要がある指標
-                if media_metric == 'CTR':
-                    media_df = df.groupby('ServiceNameJA').apply(
-                        lambda x: (x['Clicks'].sum() / x['Impressions'].sum()) * 100 if x['Impressions'].sum() > 0 else 0
-                    ).reset_index(name=media_metric)
-                elif media_metric == 'CVR':
-                    media_df = df.groupby('ServiceNameJA').apply(
-                        lambda x: (x['Conversions'].sum() / x['Clicks'].sum()) * 100 if x['Clicks'].sum() > 0 else 0
-                    ).reset_index(name=media_metric)
-                elif media_metric == 'CPC':
-                    media_df = df.groupby('ServiceNameJA').apply(
-                        lambda x: x['Cost'].sum() / x['Clicks'].sum() if x['Clicks'].sum() > 0 else 0
-                    ).reset_index(name=media_metric)
-                elif media_metric == 'CPA':
-                    media_df = df.groupby('ServiceNameJA').apply(
-                        lambda x: x['Cost'].sum() / x['Conversions'].sum() if x['Conversions'].sum() > 0 else 0
-                    ).reset_index(name=media_metric)
-                elif media_metric == 'CPM':
-                    media_df = df.groupby('ServiceNameJA').apply(
-                        lambda x: (x['Cost'].sum() / x['Impressions'].sum()) * 1000 if x['Impressions'].sum() > 0 else 0
-                    ).reset_index(name=media_metric)
+            # グラフ表示用の指標名でフィルタリング
+            if graph_granularity != 'All':
+                for key, value in graph_selected_item.items():
+                    if value != 'All' and key in graph_filtered_df.columns:
+                        graph_filtered_df = graph_filtered_df[graph_filtered_df[key] == value]
+                        
+                        # フィルター後にデータが残っているか確認
+                        if graph_filtered_df.empty:
+                            st.warning(f"選択されたグラフ表示 {key}: {value} にデータがありません。")
+                            return
+                
+            # グラフデータの準備
+            if graph_granularity == 'All':
+                # 全体を集計（時間軸だけでグループ化）
+                graph_group_cols = [time_column]
+                graph_df = aggregate_metrics(graph_filtered_df, graph_group_cols)
+                color_column = None  # 色分けなし
             else:
-                # 合計値を使用する指標
-                media_df = df.groupby('ServiceNameJA')[media_metric].sum().reset_index()
+                # 選択された粒度でグループ化
+                graph_group_cols = [time_column, graph_granularity]
+                graph_df = aggregate_metrics(graph_filtered_df, graph_group_cols)
+                color_column = graph_granularity  # 色分け列を設定
             
-            # 上位10媒体に絞る
-            media_df = media_df.sort_values(media_metric, ascending=False).head(10)
-            
-            # グラフ作成
-            fig = px.pie(
-                media_df,
-                values=media_metric,
-                names='ServiceNameJA',
-                title=f"媒体別 {media_metric} 構成比（上位10媒体）"
+            if bar_metric in graph_df.columns:
+                # グラフ作成
+                if color_column:  # 粒度が選択されている場合は積み上げグラフ
+                    fig = px.bar(
+                        graph_df,
+                        x=time_column,
+                        y=bar_metric,
+                        color=color_column,
+                        title=f"{bar_metric}の推移",
+                        barmode="stack"
+                    )
+                else:  # Allの場合は通常の棒グラフ
+                    fig = px.bar(
+                        graph_df,
+                        x=time_column,
+                        y=bar_metric,
+                        title=f"{bar_metric}の推移"
+                    )
+                
+                # レイアウト調整
+                fig.update_layout(
+                    xaxis_title=time_axis,
+                    yaxis_title=bar_metric,
+                    legend_title=graph_granularity if graph_granularity != 'All' else None,
+                    height=400
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning(f"{bar_metric}のデータがありません")
+        else:
+            st.warning("グラフを表示するデータがありません。フィルター設定を見直してください。")
+        
+        # 折れ線グラフのセクション＋指標選択
+        st.subheader("折れ線グラフ")
+        
+        # コンパクトな指標選択
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            line_metric1 = st.selectbox(
+                "第1指標",
+                ["CPM", "CTR", "CPC", "CPA", "CVR"],
+                index=0,
+                key="line_metric1"
             )
-            fig.update_traces(textposition='inside', textinfo='percent+label')
+        
+        with col2:
+            line_metric2_options = ["なし", "CPM", "CTR", "CPC", "CPA", "CVR", "Impressions", "Clicks", "Cost", "Conversions"]
+            line_metric2 = st.selectbox(
+                "第2指標（オプション）",
+                line_metric2_options,
+                index=0,
+                key="line_metric2"
+            )
+        
+        if not aggregated_df.empty and 'graph_df' in locals():
+            if line_metric1 in graph_df.columns:
+                # グラフ作成（第2軸対応）
+                if line_metric2 != "なし" and line_metric2 in graph_df.columns:
+                    # 第2指標を使用する場合
+                    fig = make_subplots(specs=[[{"secondary_y": True}]])
+                    
+                    # 第1指標のグラフ
+                    if color_column:  # 粒度が選択されている場合は色分け
+                        for name, group in graph_df.groupby(color_column):
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=group[time_column],
+                                    y=group[line_metric1],
+                                    mode='lines+markers',
+                                    name=f"{line_metric1} - {name}",
+                                    legendgroup="group1"
+                                ),
+                                secondary_y=False
+                            )
+                    else:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=graph_df[time_column],
+                                y=graph_df[line_metric1],
+                                mode='lines+markers',
+                                name=line_metric1,
+                                legendgroup="group1"
+                            ),
+                            secondary_y=False
+                        )
+                    
+                    # 第2指標のグラフ（点線スタイル）
+                    if color_column:  # 粒度が選択されている場合は色分け
+                        for name, group in graph_df.groupby(color_column):
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=group[time_column],
+                                    y=group[line_metric2],
+                                    mode='lines+markers',
+                                    name=f"{line_metric2} - {name}",
+                                    line=dict(dash='dash'),
+                                    legendgroup="group2"
+                                ),
+                                secondary_y=True
+                            )
+                    else:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=graph_df[time_column],
+                                y=graph_df[line_metric2],
+                                mode='lines+markers',
+                                name=line_metric2,
+                                line=dict(dash='dash'),
+                                legendgroup="group2"
+                            ),
+                            secondary_y=True
+                        )
+                    
+                    # 軸タイトルの設定
+                    fig.update_yaxes(title_text=line_metric1, secondary_y=False)
+                    fig.update_yaxes(title_text=line_metric2, secondary_y=True)
+                    
+                    # グラフタイトル
+                    title = f"{line_metric1}と{line_metric2}の推移"
+                    fig.update_layout(title_text=title)
+                    
+                    # Y軸のフォーマット調整
+                    if line_metric1 in ['CTR', 'CVR']:
+                        fig.update_yaxes(ticksuffix='%', secondary_y=False)
+                    elif line_metric1 in ['Cost', 'CPC', 'CPA', 'CPM']:
+                        fig.update_yaxes(ticksuffix='円', secondary_y=False)
+                    
+                    if line_metric2 in ['CTR', 'CVR']:
+                        fig.update_yaxes(ticksuffix='%', secondary_y=True)
+                    elif line_metric2 in ['Cost', 'CPC', 'CPA', 'CPM']:
+                        fig.update_yaxes(ticksuffix='円', secondary_y=True)
+                    
+                else:
+                    # 第2指標を使用しない場合（従来の表示）
+                    if color_column:  # 粒度が選択されている場合は色分け折れ線グラフ
+                        fig = px.line(
+                            graph_df,
+                            x=time_column,
+                            y=line_metric1,
+                            color=color_column,
+                            title=f"{line_metric1}の推移",
+                            markers=True
+                        )
+                    else:  # Allの場合は通常の折れ線グラフ
+                        fig = px.line(
+                            graph_df,
+                            x=time_column,
+                            y=line_metric1,
+                            title=f"{line_metric1}の推移",
+                            markers=True
+                        )
+                    
+                    # レイアウト調整
+                    fig.update_layout(
+                        xaxis_title=time_axis,
+                        yaxis_title=line_metric1,
+                        legend_title=graph_granularity if graph_granularity != 'All' else None
+                    )
+                    
+                    # Yラベルのフォーマット調整
+                    if line_metric1 in ['CTR', 'CVR']:
+                        fig.update_layout(yaxis_ticksuffix='%')
+                    elif line_metric1 in ['Cost', 'CPC', 'CPA', 'CPM']:
+                        fig.update_layout(yaxis_ticksuffix='円')
+                
+                # グラフの高さを調整
+                fig.update_layout(height=400)
+                
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning(f"{line_metric1}のデータがありません")
+        else:
+            st.warning("グラフを表示するデータがありません。フィルター設定を見直してください。")
+        
+        # 集計データ表示セクション
+        st.subheader("集計データ表示")
+        
+        if not aggregated_df.empty:
+            # 指標の表示順序の設定
+            display_metrics = []
+            if time_column in aggregated_df.columns:
+                display_metrics.append(time_column)
             
-            st.plotly_chart(fig, use_container_width=True)
-    
+            if selected_granularity != 'All' and selected_granularity in aggregated_df.columns:
+                display_metrics.append(selected_granularity)
+            
+            # 主要指標を追加
+            metrics_order = ['Impressions', 'CPM', 'Clicks', 'CTR', 'CPC', 'Cost', 'Conversions', 'CPA', 'CVR']
+            for metric in metrics_order:
+                if metric in aggregated_df.columns:
+                    display_metrics.append(metric)
+            
+            # 数値フォーマットの調整
+            formatted_df = format_metrics_enhanced(
+                aggregated_df[display_metrics],
+                integer_cols=['Impressions', 'Clicks', 'Conversions'],
+                currency_cols=['Cost', 'CPM', 'CPC', 'CPA'],
+                percentage_cols=['CTR', 'CVR']
+            )
+            
+            # 表の幅を画面いっぱいに広げる
+            st.dataframe(formatted_df, use_container_width=True)
+        else:
+            st.warning("該当するデータがありません。フィルター設定を見直してください。")
+                
     # タブ2: 期間比較分析 - 既存のタブを拡張
     with tab2:
         st.header("期間比較分析")
