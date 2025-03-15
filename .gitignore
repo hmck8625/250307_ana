@@ -8,8 +8,6 @@ credentials.json
 streamlit/
 
 # Python環境
-venv/
-.venv/
 env/
 .env/
 __pycache__/
